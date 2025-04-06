@@ -1,1 +1,7 @@
 mkdir -p Data_Preparation Clustering_Analysis
+mkdir -p Data_Preparation/raw_data
+mkdir -p Data_Preparation/processed_data
+mkdir -p Data_Preparation/documentation
+mkdir -p Clustering_Analysis/figures
+mkdir -p Clustering_Analysis/models
+mkdir -p Clustering_Analysis/documentation
