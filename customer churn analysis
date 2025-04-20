@@ -1,0 +1,301 @@
+# Import libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
+import tensorflow as tf
+from tensorflow import keras
+
+# Loading the dataset
+df = pd.read_csv('telecom_customer_churn.csv')
+
+# Display basic information
+print(df.shape)
+print(df.info())
+print(df.describe())
+
+# Check for missing values
+print(df.isnull().sum())
+
+# Display first few rows of the dataset
+print(df.head())
+
+# Examine target variable distribution
+churn_distribution = df['Churn'].value_counts(normalize=True) * 100
+print(f"Churn Distribution: \n{churn_distribution}")
+
+plt.figure(figsize=(10, 6))
+sns.countplot(x='Churn', data=df)
+plt.title('Customer Churn Distribution')
+plt.savefig('churn_distribution.png')
+plt.show()
+
+# Analyze relationship between numerical features and churn
+numerical_features = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+if 'Churn' in numerical_features:
+    numerical_features.remove('Churn')
+
+plt.figure(figsize=(15, 10))
+for i, feature in enumerate(numerical_features):
+    plt.subplot(3, 4, i+1)
+    sns.boxplot(x='Churn', y=feature, data=df)
+    plt.title(f'{feature} vs Churn')
+plt.tight_layout()
+plt.savefig('numerical_features_vs_churn.png')
+plt.show()
+
+# Analyze relationship between categorical features and churn
+categorical_features = df.select_dtypes(include=['object']).columns.tolist()
+
+plt.figure(figsize=(15, 10))
+for i, feature in enumerate(categorical_features):
+    plt.subplot(3, 3, i+1)
+    churn_rate = df.groupby(feature)['Churn'].mean()
+    churn_rate.plot(kind='bar')
+    plt.title(f'Churn Rate by {feature}')
+plt.tight_layout()
+plt.savefig('categorical_features_vs_churn.png')
+plt.show()
+
+# Correlation heatmap for numerical features
+plt.figure(figsize=(12, 10))
+correlation = df[numerical_features + ['Churn']].corr()
+sns.heatmap(correlation, annot=True, cmap='coolwarm', fmt='.2f')
+plt.title('Feature Correlation Heatmap')
+plt.savefig('correlation_heatmap.png')
+plt.show()
+
+# Separate features and target variable
+X = df.drop('Churn', axis=1)
+y = df['Churn']
+
+# Identify numerical and categorical features
+numerical_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+categorical_features = X.select_dtypes(include=['object']).columns.tolist()
+
+# Create preprocessing pipelines
+numerical_transformer = StandardScaler()
+categorical_transformer = OneHotEncoder(handle_unknown='ignore', sparse=False)
+
+# Combine preprocessing steps
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numerical_transformer, numerical_features),
+        ('cat', categorical_transformer, categorical_features)
+    ])
+
+# Apply preprocessing
+X_processed = preprocessor.fit_transform(X)
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X_processed, y, test_size=0.2, random_state=42, stratify=y)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Testing set shape: {X_test.shape}")
+
+
+# Define model architecture
+def create_model(input_dim, optimizer='adam'):
+    model = keras.Sequential([
+        # Input layer
+        keras.layers.Dense(64, activation='relu', input_shape=(input_dim,)),
+        keras.layers.BatchNormalization(),
+        keras.layers.Dropout(0.3),
+        
+        # Hidden layers
+        keras.layers.Dense(32, activation='relu'),
+        keras.layers.BatchNormalization(),
+        keras.layers.Dropout(0.2),
+        
+        # Output layer for binary classification
+        keras.layers.Dense(1, activation='sigmoid')
+    ])
+    
+    # Compile the model
+    model.compile(
+        optimizer=optimizer,
+        loss='binary_crossentropy',
+        metrics=['accuracy', tf.keras.metrics.AUC()]
+    )
+    
+    return model
+
+# Create the model
+model = create_model(input_dim)
+model.summary()
+
+
+# Set up early stopping
+early_stopping = keras.callbacks.EarlyStopping(
+    monitor='val_loss',
+    patience=10,
+    restore_best_weights=True
+)
+
+# Class weights to handle imbalanced data
+class_weights = {0: 1, 1: (y_train == 0).sum() / (y_train == 1).sum()}
+print(f"Class weights: {class_weights}")
+
+# Train the model
+history = model.fit(
+    X_train, y_train,
+    epochs=100,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stopping],
+    class_weight=class_weights,
+    verbose=1
+)
+
+# Save the model
+model.save('telecom_churn_ann_model.h5')
+
+# Plot training history
+plt.figure(figsize=(12, 5))
+
+# Plot accuracy
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend(['Train', 'Validation'], loc='lower right')
+
+# Plot loss
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend(['Train', 'Validation'], loc='upper right')
+
+plt.tight_layout()
+plt.savefig('training_history.png')
+plt.show()
+
+# Evaluate on test set
+test_loss, test_accuracy, test_auc = model.evaluate(X_test, y_test)
+print(f"Test accuracy: {test_accuracy:.4f}")
+print(f"Test AUC: {test_auc:.4f}")
+
+# Make predictions
+y_pred_prob = model.predict(X_test)
+y_pred = (y_pred_prob > 0.5).astype(int).flatten()
+
+# Classification report
+print("Classification Report:")
+print(classification_report(y_test, y_pred))
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.savefig('confusion_matrix.png')
+plt.show()
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_test, y_pred_prob)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic')
+plt.legend(loc="lower right")
+plt.savefig('roc_curve.png')
+plt.show()
+
+# Feature importance analysis (using a permutation approach)
+from sklearn.inspection import permutation_importance
+
+# Create a wrapper for the Keras model to use with scikit-learn
+class KerasModelWrapper:
+    def __init__(self, model):
+        self.model = model
+        
+    def predict(self, X):
+        return self.model.predict(X).flatten()
+
+# Instantiate the wrapper
+model_wrapper = KerasModelWrapper(model)
+
+# Perform permutation importance
+result = permutation_importance(model_wrapper, X_test, y_test, n_repeats=10, random_state=42)
+
+# Get feature names after preprocessing
+feature_names = numerical_features + list(preprocessor.named_transformers_['cat'].get_feature_names_out(categorical_features))
+
+# Create a DataFrame with importance scores
+importance_df = pd.DataFrame({
+    'Feature': feature_names,
+    'Importance': result.importances_mean,
+    'Std': result.importances_std
+})
+
+# Sort by importance
+importance_df = importance_df.sort_values('Importance', ascending=False)
+
+# Plot feature importances
+plt.figure(figsize=(12, 8))
+sns.barplot(x='Importance', y='Feature', data=importance_df.head(20))
+plt.title('Top 20 Feature Importance')
+plt.tight_layout()
+plt.savefig('feature_importance.png')
+plt.show()
+
+
+# Add churn probability to original dataframe
+df_with_prob = df.copy()
+df_with_prob['churn_probability'] = model.predict(preprocessor.transform(X)).flatten()
+
+# Define risk segments
+df_with_prob['churn_risk'] = pd.cut(
+    df_with_prob['churn_probability'], 
+    bins=[0, 0.3, 0.7, 1], 
+    labels=['Low Risk', 'Medium Risk', 'High Risk']
+)
+
+# Analyze segments
+segment_analysis = df_with_prob.groupby('churn_risk').agg({
+    'churn_probability': 'mean',
+    'Churn': 'mean',
+    'CustomerID': 'count'
+}).rename(columns={'CustomerID': 'count'})
+
+print("Customer Segments by Churn Risk:")
+print(segment_analysis)
+
+# Visualize segments
+plt.figure(figsize=(10, 6))
+sns.countplot(x='churn_risk', data=df_with_prob)
+plt.title('Customer Segmentation by Churn Risk')
+plt.savefig('churn_risk_segments.png')
+plt.show()
+
+# Analyze key metrics by segment
+# (You would replace these with actual numeric columns from your dataset)
+key_metrics = ['tenure', 'MonthlyCharges', 'TotalCharges'] 
+
+plt.figure(figsize=(15, 5))
+for i, metric in enumerate(key_metrics):
+    if metric in df_with_prob.columns:
+        plt.subplot(1, 3, i+1)
+        sns.boxplot(x='churn_risk', y=metric, data=df_with_prob)
+        plt.title(f'{metric} by Churn Risk')
+plt.tight_layout()
+plt.savefig('metrics_by_segment.png')
+plt.show()
